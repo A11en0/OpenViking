@@ -75,7 +75,25 @@ class BrowseCommands:
         uri = uri or self.client.config.default_resource_uri
 
         try:
-            tree_str = self.client.tree(uri)
+            tree_result = self.client.tree(uri)
+
+            # Handle different return types
+            if isinstance(tree_result, str):
+                tree_str = tree_result
+            elif isinstance(tree_result, list):
+                # Build tree from list of items
+                lines = []
+                for item in tree_result:
+                    if isinstance(item, dict):
+                        name = item.get("name", "unknown")
+                        is_dir = item.get("isDir", False)
+                        prefix = "📁 " if is_dir else "📄 "
+                        lines.append(f"{prefix}{name}")
+                    else:
+                        lines.append(str(item))
+                tree_str = "\n".join(lines)
+            else:
+                tree_str = str(tree_result) if tree_result else ""
 
             if tree_str:
                 self.console.print(Panel(tree_str, title=f"Tree: {uri}", border_style="blue"))

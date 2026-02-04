@@ -44,24 +44,40 @@ class MemexRecipe:
         self.config = config or client.config
         self._llm_client: Optional[OpenAI] = None
         self._chat_history: list[dict[str, str]] = []
+        self._vlm_config: Optional[dict] = None
+
+    @property
+    def vlm_config(self) -> dict:
+        """Get VLM config from ov.conf."""
+        if self._vlm_config is None:
+            self._vlm_config = self.config.get_vlm_config()
+        return self._vlm_config
 
     @property
     def llm_client(self) -> OpenAI:
         """Get or create LLM client."""
         if self._llm_client is None:
-            if self.config.llm_backend == "openai":
-                self._llm_client = OpenAI()
-            elif self.config.llm_backend == "volcengine":
-                # Volcengine uses OpenAI-compatible API
-                import os
+            vlm = self.vlm_config
+            backend = vlm.get("backend", "openai")
 
+            if backend == "openai":
                 self._llm_client = OpenAI(
-                    api_key=os.getenv("ARK_API_KEY"),
-                    base_url="https://ark.cn-beijing.volces.com/api/v3",
+                    api_key=vlm.get("api_key"),
+                    base_url=vlm.get("api_base"),
+                )
+            elif backend == "volcengine":
+                self._llm_client = OpenAI(
+                    api_key=vlm.get("api_key"),
+                    base_url=vlm.get("api_base") or "https://ark.cn-beijing.volces.com/api/v3",
                 )
             else:
-                raise ValueError(f"Unsupported LLM backend: {self.config.llm_backend}")
+                raise ValueError(f"Unsupported LLM backend: {backend}")
         return self._llm_client
+
+    @property
+    def llm_model(self) -> str:
+        """Get LLM model name from config."""
+        return self.vlm_config.get("model", "gpt-4o-mini")
 
     def search(
         self,
@@ -160,7 +176,7 @@ class MemexRecipe:
         max_tokens = max_tokens or self.config.llm_max_tokens
 
         response = self.llm_client.chat.completions.create(
-            model=self.config.llm_model,
+            model=self.llm_model,
             messages=messages,  # type: ignore
             temperature=temperature,
             max_tokens=max_tokens,
