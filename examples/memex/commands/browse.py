@@ -140,6 +140,9 @@ class BrowseCommands:
             self.console.print("[red]Usage: /abstract <uri>[/red]")
             return
 
+        # Remove trailing slash if present
+        uri = uri.rstrip("/")
+
         try:
             content = self.client.abstract(uri)
 
@@ -167,6 +170,9 @@ class BrowseCommands:
         if not uri:
             self.console.print("[red]Usage: /overview <uri>[/red]")
             return
+
+        # Remove trailing slash if present
+        uri = uri.rstrip("/")
 
         try:
             content = self.client.overview(uri)
