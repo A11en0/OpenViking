@@ -128,14 +128,6 @@ class MemexRecipe:
         return search_results
 
     def build_context(self, search_results: list[dict[str, Any]]) -> str:
-        """Build context string from search results.
-
-        Args:
-            search_results: List of search results.
-
-        Returns:
-            Formatted context string.
-        """
         if not search_results:
             return "No relevant information found in the knowledge base."
 
@@ -145,12 +137,14 @@ class MemexRecipe:
             content = result.get("content", "")
             score = result.get("score", 0.0)
 
-            # If content is empty, try to get abstract
             if not content:
                 try:
-                    content = self.client.abstract(uri)
+                    content = self.client.read(uri)
                 except Exception:
-                    content = f"[Content from {uri}]"
+                    try:
+                        content = self.client.abstract(uri)
+                    except Exception:
+                        content = f"[Content from {uri}]"
 
             context_parts.append(f"[Source {i}] {uri} (relevance: {score:.2f})\n{content}")
 

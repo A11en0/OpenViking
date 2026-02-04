@@ -26,7 +26,7 @@ class MemexConfig:
 
     # Search settings
     search_top_k: int = 5
-    search_score_threshold: float = 0.3
+    search_score_threshold: float = 0.1
 
     # Session settings
     session_id: Optional[str] = None
@@ -49,7 +49,7 @@ class MemexConfig:
             llm_temperature=float(os.getenv("MEMEX_LLM_TEMPERATURE", "0.7")),
             llm_max_tokens=int(os.getenv("MEMEX_LLM_MAX_TOKENS", "2048")),
             search_top_k=int(os.getenv("MEMEX_SEARCH_TOP_K", "5")),
-            search_score_threshold=float(os.getenv("MEMEX_SEARCH_SCORE_THRESHOLD", "0.3")),
+            search_score_threshold=float(os.getenv("MEMEX_SEARCH_SCORE_THRESHOLD", "0.1")),
         )
 
     def get_openviking_config(self) -> OpenVikingConfig:
