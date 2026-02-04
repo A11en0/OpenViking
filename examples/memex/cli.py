@@ -368,8 +368,35 @@ class MemexCLI:
 
         # Cleanup
         self.console.print("\n[cyan]Goodbye! 👋[/cyan]")
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Clean up resources on exit."""
+        # Close Feishu connection if active
+        if self.feishu:
+            try:
+                self.feishu.disconnect()
+            except Exception:
+                pass
+
+        # Close OpenViking client
         if self.client:
-            self.client.close()
+            try:
+                self.client.close()
+            except Exception:
+                pass
+
+        # Kill any remaining AGFS processes for this data path
+        import subprocess
+
+        try:
+            subprocess.run(
+                ["pkill", "-f", "agfs-server"],
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
 
 
 def main():

@@ -33,28 +33,31 @@ class KnowledgeCommands:
         instruction: Optional[str] = None,
         wait: bool = True,
     ) -> None:
-        """Add a resource to the knowledge base.
-
-        Args:
-            path: File path, directory path, or URL.
-            target: Target URI in viking://.
-            reason: Reason for adding this resource.
-            instruction: Special instructions for processing.
-            wait: Whether to wait for processing to complete.
-        """
         if not path:
             self.console.print("[red]Usage: /add <path> [target] [reason][/red]")
             return
 
-        # Expand user path
         if path.startswith("~"):
             path = os.path.expanduser(path)
 
-        # Check if local path exists
         if not path.startswith(("http://", "https://")) and not os.path.exists(path):
             self.console.print(f"[red]Path not found: {path}[/red]")
             return
 
+        is_dir = os.path.isdir(path)
+        if is_dir:
+            self._add_directory(path, target, reason, instruction, wait)
+        else:
+            self._add_file(path, target, reason, instruction, wait)
+
+    def _add_file(
+        self,
+        path: str,
+        target: Optional[str] = None,
+        reason: Optional[str] = None,
+        instruction: Optional[str] = None,
+        wait: bool = True,
+    ) -> None:
         try:
             with Progress(
                 SpinnerColumn(),
@@ -70,7 +73,15 @@ class KnowledgeCommands:
                     instruction=instruction,
                 )
 
+                status = result.get("status", "unknown")
+                errors = result.get("errors", [])
                 root_uri = result.get("root_uri", "unknown")
+
+                if status == "error" or errors:
+                    error_msg = errors[0] if errors else "Unknown error"
+                    self.console.print(f"[red]Error: {error_msg}[/red]")
+                    return
+
                 progress.update(task, description=f"Added to {root_uri}")
 
                 if wait:
@@ -88,6 +99,123 @@ class KnowledgeCommands:
 
         except Exception as e:
             self.console.print(f"[red]Error adding resource: {e}[/red]")
+
+    def _add_directory(
+        self,
+        directory: str,
+        target: Optional[str] = None,
+        reason: Optional[str] = None,
+        instruction: Optional[str] = None,
+        wait: bool = True,
+    ) -> None:
+        supported_extensions = {
+            ".txt",
+            ".md",
+            ".markdown",
+            ".rst",
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".java",
+            ".c",
+            ".cpp",
+            ".h",
+            ".hpp",
+            ".go",
+            ".rs",
+            ".rb",
+            ".php",
+            ".swift",
+            ".kt",
+            ".scala",
+            ".sh",
+            ".bash",
+            ".json",
+            ".yaml",
+            ".yml",
+            ".toml",
+            ".xml",
+            ".html",
+            ".css",
+            ".scss",
+            ".pdf",
+            ".doc",
+            ".docx",
+        }
+
+        files_to_add = []
+        for root, dirs, files in os.walk(directory):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for file in files:
+                if file.startswith("."):
+                    continue
+                ext = os.path.splitext(file)[1].lower()
+                if ext in supported_extensions:
+                    files_to_add.append(os.path.join(root, file))
+
+        if not files_to_add:
+            self.console.print(f"[yellow]No supported files found in {directory}[/yellow]")
+            return
+
+        self.console.print(f"[dim]Found {len(files_to_add)} files to add...[/dim]")
+
+        success_count = 0
+        error_count = 0
+        added_uris = []
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console,
+        ) as progress:
+            task = progress.add_task(f"Adding files from {directory}...", total=len(files_to_add))
+
+            for i, file_path in enumerate(files_to_add):
+                progress.update(
+                    task,
+                    description=f"Adding ({i + 1}/{len(files_to_add)}): {os.path.basename(file_path)}",
+                )
+
+                try:
+                    result = self.client.add_resource(
+                        path=file_path,
+                        target=target,
+                        reason=reason or f"Imported from {directory}",
+                        instruction=instruction,
+                    )
+
+                    status = result.get("status", "unknown")
+                    errors = result.get("errors", [])
+
+                    if status == "error" or errors:
+                        error_count += 1
+                    else:
+                        success_count += 1
+                        root_uri = result.get("root_uri", "")
+                        if root_uri:
+                            added_uris.append(root_uri)
+
+                except Exception:
+                    error_count += 1
+
+                progress.advance(task)
+
+            if wait and success_count > 0:
+                progress.update(task, description="Processing...")
+                self.client.wait_processed(timeout=300)
+
+            progress.update(task, description="Done!")
+
+        self.console.print(
+            Panel(
+                f"[green]✓[/green] Added {success_count} files from {directory}\n"
+                f"[red]✗[/red] Failed: {error_count} files",
+                title="Directory Import Complete",
+                border_style="green" if error_count == 0 else "yellow",
+            )
+        )
 
     def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove a resource from the knowledge base.
@@ -114,19 +242,10 @@ class KnowledgeCommands:
         reason: Optional[str] = None,
         wait: bool = True,
     ) -> None:
-        """Import all files from a directory.
-
-        Args:
-            directory: Directory path to import.
-            target: Target URI in viking://.
-            reason: Reason for importing.
-            wait: Whether to wait for processing to complete.
-        """
         if not directory:
             self.console.print("[red]Usage: /import <directory> [target][/red]")
             return
 
-        # Expand user path
         if directory.startswith("~"):
             directory = os.path.expanduser(directory)
 
@@ -134,39 +253,7 @@ class KnowledgeCommands:
             self.console.print(f"[red]Not a directory: {directory}[/red]")
             return
 
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=self.console,
-            ) as progress:
-                task = progress.add_task(f"Importing {directory}...", total=None)
-
-                # Add the entire directory as a resource
-                result = self.client.add_resource(
-                    path=directory,
-                    target=target,
-                    reason=reason or f"Imported from {directory}",
-                )
-
-                root_uri = result.get("root_uri", "unknown")
-                progress.update(task, description=f"Imported to {root_uri}")
-
-                if wait:
-                    progress.update(task, description="Processing...")
-                    self.client.wait_processed(timeout=300)
-                    progress.update(task, description="Done!")
-
-            self.console.print(
-                Panel(
-                    f"[green]✓[/green] Imported: {directory}\n[cyan]URI:[/cyan] {root_uri}",
-                    title="Directory Imported",
-                    border_style="green",
-                )
-            )
-
-        except Exception as e:
-            self.console.print(f"[red]Error importing directory: {e}[/red]")
+        self._add_directory(directory, target, reason, wait=wait)
 
     def add_url(
         self,
