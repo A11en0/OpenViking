@@ -195,6 +195,7 @@ class MemexRecipe:
                 uri = r.uri if hasattr(r, "uri") else str(r)
                 score = r.score if hasattr(r, "score") else 0.0
 
+                content = ""
                 if score >= self.high_confidence_threshold:
                     try:
                         content = self.client.read(uri)
@@ -209,19 +210,25 @@ class MemexRecipe:
                             continue
                 else:
                     try:
-                        content = self.client.abstract(uri)
-                        if not content:
-                            content = self.client.read(uri)[:500] if self.client.read(uri) else ""
-                    except Exception:
-                        continue
+                        content = self.client.read(uri)
+                        content = content[:1000] if content else ""
+                    except Exception as e:
+                        if "is a directory" in str(e):
+                            try:
+                                content = f"[Directory] {self.client.abstract(uri)}"
+                            except Exception:
+                                continue
+                        else:
+                            continue
 
-                search_results.append(
-                    {
-                        "uri": uri,
-                        "score": score,
-                        "content": content,
-                    }
-                )
+                if content:
+                    search_results.append(
+                        {
+                            "uri": uri,
+                            "score": score,
+                            "content": content,
+                        }
+                    )
             except Exception:
                 continue
 
