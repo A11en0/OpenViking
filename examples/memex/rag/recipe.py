@@ -1,12 +1,11 @@
 """
 Memex RAG Recipe - RAG flow implementation for Memex.
 
-Based on examples/common/recipe.py pattern with Tier 2 improvements:
+Simplified design:
 - OpenViking Session integration for context-aware search
 - Automatic memory extraction via session.commit()
-- Conversation-aware query rewriting
-- Confidence-based uncertainty hints
-- Smart context management (L0/L2 based on score)
+- Direct use of OpenViking score for ranking (no rerank)
+- Unified content loading (no threshold-based truncation)
 """
 
 from typing import Any, Optional
@@ -23,7 +22,7 @@ except ImportError:
     ContextPart = None
 
 
-DEFAULT_SYSTEM_PROMPT = """You are Memex, a personal knowledge assistant. 
+DEFAULT_SYSTEM_PROMPT = """You are Memex, a personal knowledge assistant.
 You help users find and understand information from their personal knowledge base.
 
 When answering questions:
@@ -32,19 +31,14 @@ When answering questions:
 3. Cite sources using [Source N] format when referencing information
 4. Be concise but thorough
 
-{confidence_hint}
-
 Context from knowledge base:
 {context}
 """
 
-HIGH_CONFIDENCE_HINT = ""
-LOW_CONFIDENCE_HINT = """Note: The search results have relatively low relevance scores. 
-The information below may not directly answer the question. 
-If unsure, acknowledge the limitation and suggest what additional information might help."""
-
-NO_RESULTS_HINT = """Note: No relevant information was found in the knowledge base for this query.
-Please let the user know and suggest they add relevant documents or rephrase their question."""
+NO_CONTEXT_PROMPT = """You are Memex, a personal knowledge assistant.
+No relevant information was found in the knowledge base for this query.
+Please let the user know and suggest they add relevant documents or rephrase their question.
+"""
 
 
 class MemexRecipe:
@@ -60,11 +54,7 @@ class MemexRecipe:
         self._vlm_config: Optional[dict] = None
         self._session = None
 
-        self.high_confidence_threshold = 0.25
-        self.low_confidence_threshold = 0.15
-
     def start_session(self, session_id: Optional[str] = None):
-        """Start or resume an OpenViking session for context-aware search."""
         self._session = self.client.get_session(session_id)
         if session_id:
             try:
@@ -74,7 +64,6 @@ class MemexRecipe:
         return self._session
 
     def end_session(self) -> dict[str, Any]:
-        """End session and extract long-term memories."""
         if not self._session:
             return {"status": "no_session"}
         try:
@@ -85,12 +74,10 @@ class MemexRecipe:
 
     @property
     def session(self):
-        """Get current OpenViking session."""
         return self._session
 
     @property
     def session_id(self) -> Optional[str]:
-        """Get current session ID."""
         return self._session.session_id if self._session else None
 
     @property
@@ -195,31 +182,17 @@ class MemexRecipe:
                 uri = r.uri if hasattr(r, "uri") else str(r)
                 score = r.score if hasattr(r, "score") else 0.0
 
-                content = ""
-                if score >= self.high_confidence_threshold:
-                    try:
-                        content = self.client.read(uri)
-                        content = content[:2000] if content else ""
-                    except Exception as e:
-                        if "is a directory" in str(e):
-                            try:
-                                content = f"[Directory] {self.client.abstract(uri)}"
-                            except Exception:
-                                continue
-                        else:
+                try:
+                    content = self.client.read(uri)
+                    content = content[:2000] if content else ""
+                except Exception as e:
+                    if "is a directory" in str(e):
+                        try:
+                            content = f"[Directory] {self.client.abstract(uri)}"
+                        except Exception:
                             continue
-                else:
-                    try:
-                        content = self.client.read(uri)
-                        content = content[:1000] if content else ""
-                    except Exception as e:
-                        if "is a directory" in str(e):
-                            try:
-                                content = f"[Directory] {self.client.abstract(uri)}"
-                            except Exception:
-                                continue
-                        else:
-                            continue
+                    else:
+                        continue
 
                 if content:
                     search_results.append(
@@ -235,91 +208,9 @@ class MemexRecipe:
         search_results.sort(key=lambda x: x["score"], reverse=True)
         return search_results
 
-    def rerank(
-        self,
-        query: str,
-        results: list[dict[str, Any]],
-        top_k: int = 5,
-    ) -> list[dict[str, Any]]:
-        if len(results) <= 1:
-            return results
-
-        results_text = ""
-        for i, r in enumerate(results[:10]):
-            content = r.get("content", "")[:300]
-            results_text += f"[{i}] {content}\n\n"
-
-        rerank_prompt = f"""Rate each search result's relevance to the query (0-10).
-
-Query: {query}
-
-Results:
-{results_text}
-
-Return JSON array: [{{"index": 0, "score": 8}}, ...]
-Only return the JSON, no explanation."""
-
-        try:
-            response = self.llm_client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": rerank_prompt}],
-                temperature=0.1,
-                max_tokens=200,
-            )
-            content = response.choices[0].message.content or "[]"
-
-            import json
-            import re
-
-            json_match = re.search(r"\[.*\]", content, re.DOTALL)
-            if json_match:
-                scores = json.loads(json_match.group())
-                score_map = {
-                    s["index"]: s["score"] for s in scores if "index" in s and "score" in s
-                }
-
-                for i, r in enumerate(results):
-                    if i in score_map:
-                        r["rerank_score"] = score_map[i] / 10.0
-                    else:
-                        r["rerank_score"] = r.get("score", 0.0)
-
-                results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
-        except Exception:
-            pass
-
-        return results[:top_k]
-
-    def _get_confidence_level(self, search_results: list[dict[str, Any]]) -> str:
+    def build_context(self, search_results: list[dict[str, Any]]) -> str:
         if not search_results:
-            return "none"
-
-        max_score = max(r["score"] for r in search_results)
-        avg_score = sum(r["score"] for r in search_results) / len(search_results)
-
-        if (
-            max_score >= self.high_confidence_threshold
-            and avg_score >= self.low_confidence_threshold
-        ):
-            return "high"
-        elif max_score >= self.low_confidence_threshold:
-            return "low"
-        else:
-            return "very_low"
-
-    def build_context(self, search_results: list[dict[str, Any]]) -> tuple[str, str]:
-        """Build context and return (context_str, confidence_hint)."""
-        if not search_results:
-            return "No relevant information found in the knowledge base.", NO_RESULTS_HINT
-
-        confidence = self._get_confidence_level(search_results)
-
-        if confidence == "high":
-            confidence_hint = HIGH_CONFIDENCE_HINT
-        elif confidence == "low":
-            confidence_hint = LOW_CONFIDENCE_HINT
-        else:
-            confidence_hint = LOW_CONFIDENCE_HINT
+            return ""
 
         context_parts = []
         for i, result in enumerate(search_results, 1):
@@ -336,9 +227,9 @@ Only return the JSON, no explanation."""
                     except Exception:
                         content = f"[Content from {uri}]"
 
-            context_parts.append(f"[Source {i}] {uri} (relevance: {score:.2f})\n{content}")
+            context_parts.append(f"[Source {i}] {uri} (score: {score:.2f})\n{content}")
 
-        return "\n\n---\n\n".join(context_parts), confidence_hint
+        return "\n\n---\n\n".join(context_parts)
 
     def call_llm(
         self,
@@ -368,21 +259,17 @@ Only return the JSON, no explanation."""
         score_threshold: Optional[float] = None,
         target_uri: Optional[str] = None,
         use_chat_history: bool = False,
-        use_rerank: bool = True,
     ) -> str:
         if self._session and TextPart:
             self._session.add_message("user", [TextPart(text=user_query)])
 
         search_results = self.search(
             query=user_query,
-            top_k=(search_top_k or 5) * 2 if use_rerank else search_top_k,
+            top_k=search_top_k,
             target_uri=target_uri,
             score_threshold=score_threshold,
             use_session=True,
         )
-
-        if use_rerank and len(search_results) > 1:
-            search_results = self.rerank(user_query, search_results, top_k=search_top_k or 5)
 
         if self._session and ContextPart:
             for result in search_results[:3]:
@@ -400,15 +287,15 @@ Only return the JSON, no explanation."""
                 except Exception:
                     pass
 
-        context, confidence_hint = self.build_context(search_results)
+        context = self.build_context(search_results)
 
-        system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
-        formatted_system_prompt = system_prompt.format(
-            context=context,
-            confidence_hint=confidence_hint,
-        )
+        if context:
+            prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+            formatted_prompt = prompt.format(context=context)
+        else:
+            formatted_prompt = NO_CONTEXT_PROMPT
 
-        messages = [{"role": "system", "content": formatted_system_prompt}]
+        messages = [{"role": "system", "content": formatted_prompt}]
 
         if use_chat_history and self._chat_history:
             messages.extend(self._chat_history[-6:])
