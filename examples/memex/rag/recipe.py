@@ -110,34 +110,6 @@ class MemexRecipe:
     def llm_model(self) -> str:
         return self.vlm_config.get("model", "gpt-4o-mini")
 
-    def _expand_query(self, query: str) -> str:
-        has_chinese = any("\u4e00" <= c <= "\u9fff" for c in query)
-        if not has_chinese:
-            return query
-
-        expand_prompt = f"""Expand this Chinese query with English keywords for better search.
-Return format: original query + English keywords (no explanation)
-
-Query: {query}
-
-Example:
-Input: OpenViking 怎么安装
-Output: OpenViking 怎么安装 installation setup install pip
-
-Expanded query:"""
-
-        try:
-            response = self.llm_client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": expand_prompt}],
-                temperature=0.1,
-                max_tokens=100,
-            )
-            expanded = response.choices[0].message.content or query
-            return expanded.strip()
-        except Exception:
-            return query
-
     def search(
         self,
         query: str,
@@ -145,17 +117,15 @@ Expanded query:"""
         target_uri: Optional[str] = None,
         score_threshold: Optional[float] = None,
         use_session: bool = True,
-        expand_query: bool = True,
     ) -> list[dict[str, Any]]:
         top_k = top_k or self.config.search_top_k
         target_uri = target_uri or self.config.default_resource_uri
         score_threshold = score_threshold or self.config.search_score_threshold
 
-        search_query = self._expand_query(query) if expand_query else query
         session_to_use = self._session if use_session else None
 
         results = self.client.search(
-            query=search_query,
+            query=query,
             target_uri=target_uri,
             top_k=top_k,
             score_threshold=score_threshold,
