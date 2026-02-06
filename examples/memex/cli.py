@@ -426,8 +426,24 @@ def main():
         help="Path to OpenViking config file (default: ./ov.conf)",
     )
     parser.add_argument("--user", default="default", help="User name (default: default)")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (default: off)",
+    )
 
     args = parser.parse_args()
+
+    import logging
+
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+    else:
+        logging.basicConfig(level=logging.WARNING)
 
     config = MemexConfig(
         data_path=args.data_path,

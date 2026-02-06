@@ -14,6 +14,9 @@ A CLI-based personal knowledge assistant powered by OpenViking.
 ## Quick Start
 
 ```bash
+# Navigate to memex directory
+cd examples/memex
+
 # Install dependencies
 uv sync
 
@@ -23,6 +26,9 @@ cp ov.conf.example ov.conf
 
 # Run Memex
 uv run memex
+
+# Or with verbose logging
+uv run memex -v
 ```
 
 ## Configuration
@@ -94,9 +100,9 @@ uv run memex [OPTIONS]
 
 Options:
   --data-path PATH     Data storage path (default: ./memex_data)
+  --config-path PATH   OpenViking config file path (default: ./ov.conf)
   --user USER          User name (default: default)
-  --llm-backend NAME   LLM backend: openai or volcengine (default: openai)
-  --llm-model MODEL    LLM model name (default: gpt-4o-mini)
+  -v, --verbose        Enable verbose logging (default: off)
 ```
 
 ## Data Storage
