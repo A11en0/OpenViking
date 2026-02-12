@@ -103,7 +103,9 @@ HELP_TEXT = """
 - `/memories`        Show extracted memories
 
 ## Feishu Integration
-- `/feishu`          Connect to Feishu
+- `/feishu`          Connect to Feishu MCP server
+- `/feishu-login`    Login with your Feishu account (OAuth)
+- `/feishu-list <query>` Search and list documents in Feishu
 - `/feishu-doc <id>` Import Feishu document
 - `/feishu-search <query>` Search Feishu documents
 - `/feishu-tools`    List available Feishu tools
@@ -316,6 +318,11 @@ class MemexCLI:
                 self.console.print(
                     "[red]Feishu not available. Set FEISHU_APP_ID and FEISHU_APP_SECRET.[/red]"
                 )
+        elif command == "/feishu-login":
+            if self.feishu:
+                self.feishu.login()
+            else:
+                self.console.print("[red]Feishu not available.[/red]")
         elif command == "/feishu-doc":
             if self.feishu:
                 doc_id = args[0] if args else ""
@@ -332,6 +339,12 @@ class MemexCLI:
         elif command == "/feishu-tools":
             if self.feishu:
                 self.feishu.list_tools()
+            else:
+                self.console.print("[red]Feishu not available.[/red]")
+        elif command == "/feishu-list":
+            if self.feishu:
+                query = raw_input[len("/feishu-list") :].strip() or None
+                self.feishu.list_files(query)
             else:
                 self.console.print("[red]Feishu not available.[/red]")
 

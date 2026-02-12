@@ -82,10 +82,25 @@ Create `ov.conf` from the example:
 
 ### Feishu (Optional)
 - `/feishu` - Connect to Feishu
+- `/feishu-list <query>` - Search and list documents
 - `/feishu-doc <id>` - Import Feishu document
 - `/feishu-search <query>` - Search Feishu documents
 
-Set `FEISHU_APP_ID` and `FEISHU_APP_SECRET` environment variables to enable.
+#### Setup
+
+1. Install [Node.js](https://nodejs.org/) (required for `npx` to run the Feishu MCP server)
+2. Create an app on [Feishu Open Platform](https://open.feishu.cn/app) and grant document-related permissions (e.g. `docx:document:readonly`, `search:docs:read`)
+3. Set environment variables:
+
+```bash
+export FEISHU_APP_ID="cli_xxxxxxxxxxxx"
+export FEISHU_APP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+4. Start Memex — the "Feishu integration not available" message should disappear
+5. Use `/feishu` to connect, then `/feishu-list` to browse files, `/feishu-search` to search, or `/feishu-doc <id>` to import
+
+Document ID can be found in the Feishu URL, e.g. `AbCdEfGhIjKl` from `https://xxx.feishu.cn/docx/AbCdEfGhIjKl`.
 
 ### System
 - `/stats` - Show knowledge base statistics
@@ -176,8 +191,9 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 | Variable | Description |
 |----------|-------------|
 | `OPENVIKING_CONFIG_FILE` | Path to OpenViking config file |
-| `FEISHU_APP_ID` | Feishu app ID (optional) |
-| `FEISHU_APP_SECRET` | Feishu app secret (optional) |
+| `FEISHU_APP_ID` | Feishu app ID (optional, also accepts `LARK_APP_ID`) |
+| `FEISHU_APP_SECRET` | Feishu app secret (optional, also accepts `LARK_APP_SECRET`) |
+| `FEISHU_AUTH_MODE` | Auth mode: `tenant` (default), `user`, or `auto` |
 
 ## Development
 
