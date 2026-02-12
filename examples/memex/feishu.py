@@ -547,6 +547,45 @@ class FeishuMCPClient:
         self._user_token_expires_at = time.time() + token_data.get("expires_in", 7200)
         return self._user_token
 
+    def list_user_files(
+        self, folder_token: Optional[str] = None, page_size: int = 50
+    ) -> list[dict[str, Any]]:
+        """List files in user's drive (My Space).
+
+        Args:
+            folder_token: Folder token. None for root folder.
+            page_size: Number of items.
+
+        Returns:
+            List of file objects.
+        """
+        import urllib.parse
+        import urllib.request
+
+        token = self._get_access_token()
+        params = {"page_size": str(page_size)}
+        if folder_token:
+            params["folder_token"] = folder_token
+
+        query = urllib.parse.urlencode(params)
+        req = urllib.request.Request(
+            f"https://open.feishu.cn/open-apis/drive/v1/files?{query}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+        )
+        resp = urllib.request.urlopen(req, timeout=15)
+        result = json.loads(resp.read())
+
+        if result.get("code") != 0:
+            raise RuntimeError(
+                f"Failed to list files: {result.get('msg')} (code={result.get('code')})"
+            )
+
+        data = result.get("data", {})
+        return data.get("files", [])
+
     def _get_access_token(self) -> str:
         """Get the appropriate access token based on auth mode.
 
@@ -742,6 +781,51 @@ class FeishuCommands:
             self.feishu._get_user_token()
         except Exception as e:
             self.console.print(f"[red]Login failed: {e}[/red]")
+
+    def list_directory(self, folder_token: Optional[str] = None) -> None:
+        """List files in a directory (My Space or specific folder).
+
+        Args:
+            folder_token: Folder token. None for root.
+        """
+        try:
+            # Note: This uses REST API, doesn't need MCP server running, but needs user token
+            # If no user token, it might fail or return empty for tenant
+            label = f"folder '{folder_token}'" if folder_token else "My Space (root)"
+            self.console.print(f"[dim]Listing {label}...[/dim]")
+
+            files = self.feishu.list_user_files(folder_token)
+
+            if not files:
+                self.console.print(f"[dim]No files found in {label}[/dim]")
+                return
+
+            from rich.table import Table
+
+            table = Table(title=f"Feishu Files ({label})", show_header=True)
+            table.add_column("#", style="dim", width=3)
+            table.add_column("Name", style="cyan")
+            table.add_column("Type", style="yellow", width=10)
+            table.add_column("Token", style="dim")
+
+            for i, f in enumerate(files, 1):
+                name = f.get("name", "Untitled")
+                file_type = f.get("type", "unknown")
+                token = f.get("token", "")
+                table.add_row(str(i), name, file_type, token)
+
+            self.console.print(table)
+            self.console.print(
+                "[dim]Use /feishu-doc <token> to import, "
+                "or /feishu-ls <token> to browse subfolder[/dim]"
+            )
+
+        except Exception as e:
+            self.console.print(f"[red]Error listing files: {e}[/red]")
+            if "99991663" in str(e) or "access token" in str(e).lower():
+                self.console.print(
+                    "[yellow]Tip: Use /feishu-login first to access your personal files[/yellow]"
+                )
 
     def disconnect(self) -> None:
         """Disconnect from Feishu MCP server."""

@@ -105,6 +105,7 @@ HELP_TEXT = """
 ## Feishu Integration
 - `/feishu`          Connect to Feishu MCP server
 - `/feishu-login`    Login with your Feishu account (OAuth)
+- `/feishu-ls [token]` List files in My Space or folder
 - `/feishu-list <query>` Search and list documents in Feishu
 - `/feishu-doc <id>` Import Feishu document
 - `/feishu-search <query>` Search Feishu documents
@@ -321,6 +322,12 @@ class MemexCLI:
         elif command == "/feishu-login":
             if self.feishu:
                 self.feishu.login()
+            else:
+                self.console.print("[red]Feishu not available.[/red]")
+        elif command == "/feishu-ls":
+            if self.feishu:
+                token = raw_input[len("/feishu-ls") :].strip() or None
+                self.feishu.list_directory(token)
             else:
                 self.console.print("[red]Feishu not available.[/red]")
         elif command == "/feishu-doc":

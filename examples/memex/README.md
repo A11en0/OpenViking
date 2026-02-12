@@ -82,15 +82,17 @@ Create `ov.conf` from the example:
 
 ### Feishu (Optional)
 - `/feishu` - Connect to Feishu
+- `/feishu-login` - Login to access your personal documents
+- `/feishu-ls [token]` - Browse "My Space" or specific folder
 - `/feishu-list <query>` - Search and list documents
 - `/feishu-doc <id>` - Import Feishu document
-- `/feishu-search <query>` - Search Feishu documents
 
 #### Setup
 
 1. Install [Node.js](https://nodejs.org/) (required for `npx` to run the Feishu MCP server)
-2. Create an app on [Feishu Open Platform](https://open.feishu.cn/app) and grant document-related permissions (e.g. `docx:document:readonly`, `search:docs:read`)
-3. Set environment variables:
+2. Create an app on [Feishu Open Platform](https://open.feishu.cn/app) and grant document-related permissions (e.g. `docx:document:readonly`, `search:docs:read`, `drive:drive:readonly`)
+3. Add `http://localhost:8089/callback` to the Redirect URLs in "Security Settings" (for `/feishu-login`)
+4. Set environment variables:
 
 ```bash
 export FEISHU_APP_ID="cli_xxxxxxxxxxxx"
