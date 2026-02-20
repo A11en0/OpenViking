@@ -35,6 +35,34 @@ uv run memex -v
 
 Create `ov.conf` from the example:
 
+```bash
+cp ov.conf.example ov.conf
+```
+
+OpenAI example:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "your-api-key",
+      "provider": "openai",
+      "dimension": 3072,
+      "model": "text-embedding-3-large"
+    }
+  },
+  "vlm": {
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "your-api-key",
+    "provider": "openai",
+    "model": "gpt-4o"
+  }
+}
+```
+
+Volcengine (豆包) example:
+
 ```json
 {
   "embedding": {
@@ -68,11 +96,13 @@ Create `ov.conf` from the example:
 - `/read <uri>` - Read full content (L2)
 - `/abstract <uri>` - Show summary (L0)
 - `/overview <uri>` - Show overview (L1)
+- `/stat <uri>` - Show resource metadata
 
 ### Search
 - `/find <query>` - Quick semantic search
 - `/search <query>` - Deep search with intent analysis
 - `/grep <pattern>` - Content pattern search
+- `/glob <pattern>` - File pattern matching
 
 ### Q&A
 - `/ask <question>` - Single-turn question
@@ -80,12 +110,19 @@ Create `ov.conf` from the example:
 - `/clear` - Clear chat history
 - Or just type your question directly!
 
+### Session (Memory)
+- `/session` - Show current session info
+- `/commit` - End session and extract memories
+- `/memories` - Show extracted memories
+
 ### Feishu (Optional)
-- `/feishu` - Connect to Feishu
-- `/feishu-login` - Login to access your personal documents
-- `/feishu-ls [token]` - Browse "My Space" or specific folder
-- `/feishu-list <query>` - Search and list documents
+- `/feishu` - Connect to Feishu MCP server
+- `/feishu-login` - Login with your Feishu account (OAuth)
+- `/feishu-ls [token]` - List files in My Space or folder
+- `/feishu-list <query>` - Search and list documents in Feishu
 - `/feishu-doc <id>` - Import Feishu document
+- `/feishu-search <query>` - Search Feishu documents
+- `/feishu-tools` - List available Feishu tools
 
 #### Setup
 
@@ -99,8 +136,8 @@ export FEISHU_APP_ID="cli_xxxxxxxxxxxx"
 export FEISHU_APP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
-4. Start Memex — the "Feishu integration not available" message should disappear
-5. Use `/feishu` to connect, then `/feishu-list` to browse files, `/feishu-search` to search, or `/feishu-doc <id>` to import
+5. Start Memex — the "Feishu integration not available" message should disappear
+6. Use `/feishu` to connect, then `/feishu-list` to browse files, `/feishu-search` to search, or `/feishu-doc <id>` to import
 
 Document ID can be found in the Feishu URL, e.g. `AbCdEfGhIjKl` from `https://xxx.feishu.cn/docx/AbCdEfGhIjKl`.
 
@@ -205,6 +242,7 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 examples/memex/
 ├── __init__.py
 ├── __main__.py          # Entry point
+├── .python-version      # Python version pin (3.11)
 ├── cli.py               # Main CLI application
 ├── client.py            # MemexClient wrapper
 ├── config.py            # Configuration
@@ -219,15 +257,17 @@ examples/memex/
 │   ├── query.py         # Q&A commands (/ask, /chat)
 │   ├── search.py        # Search commands (/find, /search)
 │   └── stats.py         # Stats commands (/stats, /info)
+├── ov.conf              # Your local config (not committed)
 ├── ov.conf.example      # Example configuration
+├── pyproject.toml
 └── README.md
 ```
 
 ### Running Tests
 
 ```bash
-# From project root
-uv run pytest tests/ -v
+# From memex directory
+uv run pytest -v
 ```
 
 ## License

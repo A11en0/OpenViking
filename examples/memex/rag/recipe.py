@@ -126,14 +126,13 @@ class MemexRecipe:
         target_uri = target_uri or self.config.default_resource_uri
         score_threshold = score_threshold or self.config.search_score_threshold
 
-        session_to_use = self._session if use_session else None
-
-        results = self.client.search(
+        # Use find() (pure vector search) instead of search() (intent analysis + LLM)
+        # to avoid blocking on the internal IntentAnalyzer LLM call.
+        results = self.client.find(
             query=query,
             target_uri=target_uri,
             top_k=top_k,
             score_threshold=score_threshold,
-            session=session_to_use,
         )
 
         return self._process_search_results(results, top_k)

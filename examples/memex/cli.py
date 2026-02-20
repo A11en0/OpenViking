@@ -464,21 +464,7 @@ def main():
         )
     else:
         logging.basicConfig(level=logging.WARNING)
-        # openviking's get_logger() creates per-module loggers with their own
-        # handlers and propagate=False, so root logger level has no effect.
-        # Patch get_logger to respect our level for all current & future loggers.
-        import openviking.utils.logger as _ov_logger
-
-        _orig_get_logger = _ov_logger.get_logger
-
-        def _quiet_get_logger(name: str = "openviking", format_string=None):
-            logger = _orig_get_logger(name, format_string)
-            logger.setLevel(logging.WARNING)
-            return logger
-
-        _ov_logger.get_logger = _quiet_get_logger
-
-        # Also suppress already-created loggers
+        # Suppress openviking/vikingdb loggers
         for name, logger in list(logging.Logger.manager.loggerDict.items()):
             if isinstance(logger, logging.Logger) and name.startswith(("openviking", "vikingdb")):
                 logger.setLevel(logging.WARNING)
