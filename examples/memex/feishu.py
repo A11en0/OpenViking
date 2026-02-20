@@ -559,10 +559,26 @@ class FeishuMCPClient:
         Returns:
             List of file objects.
         """
-        import urllib.parse
-        import urllib.request
-
         token = self._get_access_token()
+
+        # If no folder_token, try to get root folder token first
+        if not folder_token:
+            try:
+                # Try v2 explorer API to get root folder meta
+                root_req = urllib.request.Request(
+                    "https://open.feishu.cn/open-apis/drive/explorer/v2/root_folder/meta",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                )
+                root_resp = urllib.request.urlopen(root_req, timeout=10)
+                root_res = json.loads(root_resp.read())
+                if root_res.get("code") == 0:
+                    folder_token = root_res["data"]["token"]
+            except Exception:
+                pass  # Fallback to listing without token
+
         params = {"page_size": str(page_size)}
         if folder_token:
             params["folder_token"] = folder_token
