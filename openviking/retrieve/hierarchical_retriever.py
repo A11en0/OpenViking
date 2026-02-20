@@ -11,17 +11,17 @@ import heapq
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.retrieve.types import (
+from openviking.storage import VikingDBInterface
+from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
     RelatedContext,
     TypedQuery,
 )
-from openviking.storage import VikingDBInterface
-from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.config import RerankConfig
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -58,7 +58,7 @@ class HierarchicalRetriever:
         self.rerank_config = rerank_config
 
         # Use rerank threshold if available, otherwise use a default
-        self.threshold = rerank_config.threshold if rerank_config else 0.1
+        self.threshold = rerank_config.threshold if rerank_config else 0
 
         # Initialize rerank client only if config is available
         if rerank_config and rerank_config.is_available():
@@ -98,23 +98,54 @@ class HierarchicalRetriever:
 
         collection = self._type_to_collection(query.context_type)
 
+        target_dirs = [d for d in (query.target_directories or []) if d]
+
         # Create context_type filter
         type_filter = {"op": "must", "field": "context_type", "conds": [query.context_type.value]}
 
         # Merge all filters
         filters_to_merge = [type_filter]
+        if target_dirs:
+            target_filter = {
+                "op": "or",
+                "conds": [
+                    {"op": "prefix", "field": "uri", "prefix": target_dir}
+                    for target_dir in target_dirs
+                ],
+            }
+            filters_to_merge.append(target_filter)
         if metadata_filter:
             filters_to_merge.append(metadata_filter)
 
         final_metadata_filter = {"op": "and", "conds": filters_to_merge}
 
-        # Step 1: Determine starting directories based on context_type
-        root_uris = self._get_root_uris_for_type(query.context_type)
+        if not await self.storage.collection_exists(collection):
+            logger.warning(f"[RecursiveSearch] Collection {collection} does not exist")
+            return QueryResult(
+                query=query,
+                matched_contexts=[],
+                searched_directories=[],
+            )
+
+        # Generate query vectors once to avoid duplicate embedding calls
+        query_vector = None
+        sparse_query_vector = None
+        if self.embedder:
+            result: EmbedResult = self.embedder.embed(query.query)
+            query_vector = result.dense_vector
+            sparse_query_vector = result.sparse_vector
+
+        # Step 1: Determine starting directories based on target_directories or context_type
+        if target_dirs:
+            root_uris = target_dirs
+        else:
+            root_uris = self._get_root_uris_for_type(query.context_type)
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
-            query=query.query,
             collection=collection,
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
             limit=self.GLOBAL_SEARCH_TOPK,
             filter=final_metadata_filter,
         )
@@ -125,8 +156,10 @@ class HierarchicalRetriever:
         # Step 4: Recursive search
         candidates = await self._recursive_search(
             query=query.query,
-            starting_points=starting_points,
             collection=collection,
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            starting_points=starting_points,
             limit=limit,
             mode=mode,
             threshold=effective_threshold,
@@ -145,21 +178,16 @@ class HierarchicalRetriever:
 
     async def _global_vector_search(
         self,
-        query: str,
         collection: str,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]],
         limit: int,
         filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Global vector search to locate initial directories."""
-        if not self.embedder:
-            return []
-        if not await self.storage.collection_exists(collection):
-            return []
-        result: EmbedResult = self.embedder.embed(query)
-        query_vector = result.dense_vector
         if not query_vector:
             return []
-        sparse_query_vector = result.sparse_vector or {}
+        sparse_query_vector = sparse_query_vector or {}
 
         global_filter = {
             "op": "and",
@@ -215,8 +243,10 @@ class HierarchicalRetriever:
     async def _recursive_search(
         self,
         query: str,
-        starting_points: List[Tuple[str, float]],
         collection: str,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]],
+        starting_points: List[Tuple[str, float]],
         limit: int,
         mode: str,
         threshold: Optional[float] = None,
@@ -237,8 +267,6 @@ class HierarchicalRetriever:
 
         def passes_threshold(score: float) -> bool:
             """Check if score passes threshold."""
-            if not self._rerank_client or mode != RetrieverMode.THINKING:
-                return True
             if score_gte:
                 return score >= effective_threshold
             return score > effective_threshold
@@ -249,18 +277,7 @@ class HierarchicalRetriever:
                 return base_filter
             return {"op": "and", "conds": [base_filter, extra_filter]}
 
-        # Generate query vectors
-        query_vector = None
-        sparse_query_vector = None
-
-        if self.embedder:
-            result: EmbedResult = self.embedder.embed(query)
-            query_vector = result.dense_vector
-            sparse_query_vector = result.sparse_vector
-
-        if not await self.storage.collection_exists(collection):
-            logger.warning(f"[RecursiveSearch] Collection {collection} does not exist")
-            return []
+        sparse_query_vector = sparse_query_vector or None
 
         collected: List[Dict[str, Any]] = []  # Collected results (directories and leaves)
         dir_queue: List[tuple] = []  # Priority queue: (-score, uri)
@@ -317,20 +334,27 @@ class HierarchicalRetriever:
                     alpha * score + (1 - alpha) * current_score if current_score else score
                 )
 
-                if passes_threshold(final_score) and uri not in visited:
-                    r["_final_score"] = final_score
-                    collected.append(r)
-                    logger.info(
-                        f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
-                    )
-                    if r.get("is_leaf"):
-                        visited.add(uri)
-                        continue
-                    heapq.heappush(dir_queue, (-final_score, uri))
-                else:
-                    logger.info(
+                if not passes_threshold(final_score):
+                    logger.debug(
                         f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                     )
+                    continue
+
+                # Always collect results that pass threshold, even if already
+                # visited as a directory starting point. The visited set only
+                # prevents re-entering directories for child search.
+                if not any(c.get("uri") == uri for c in collected):
+                    r["_final_score"] = final_score
+                    collected.append(r)
+                    logger.debug(
+                        f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
+                    )
+
+                if uri not in visited:
+                    if r.get("is_leaf"):
+                        visited.add(uri)
+                    else:
+                        heapq.heappush(dir_queue, (-final_score, uri))
 
             # Convergence check
             current_topk = sorted(collected, key=lambda x: x.get("_final_score", 0), reverse=True)[

@@ -61,7 +61,7 @@ class FieldTypeEnum(str, Enum):
 
 
 class DenseVectorize(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     ModelName: str
     ModelVersion: Optional[str] = None
@@ -94,7 +94,7 @@ class DenseVectorize(BaseModel):
 
 
 class SparseVectorize(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     ModelName: str
     ModelVersion: Optional[str] = None
@@ -102,14 +102,14 @@ class SparseVectorize(BaseModel):
 
 
 class VectorizeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     Dense: Optional[DenseVectorize] = None
     Sparse: Optional[SparseVectorize] = None
 
 
 class CollectionField(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     FieldName: str
     FieldType: FieldTypeEnum
@@ -145,7 +145,7 @@ class CollectionField(BaseModel):
 
 
 class CollectionMetaConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     CollectionName: str
     Fields: List[CollectionField]
@@ -180,7 +180,7 @@ class CollectionMetaConfig(BaseModel):
 
 
 class VectorIndexConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     IndexType: Literal["flat", "flat_hybrid", "FLAT", "FLAT_HYBRID"]
     Distance: Optional[Literal["l2", "ip", "cosine", "L2", "IP", "COSINE"]] = None
@@ -227,7 +227,7 @@ class VectorIndexConfig(BaseModel):
 
 
 class IndexMetaConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     IndexName: str
     VectorIndex: VectorIndexConfig
@@ -245,7 +245,7 @@ class IndexMetaConfig(BaseModel):
 
 
 class IndexMetaUpdateConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     IndexName: Optional[str] = None
     VectorIndex: Optional[VectorIndexConfig] = None
@@ -263,7 +263,7 @@ class IndexMetaUpdateConfig(BaseModel):
 
 
 class CollectionMetaUpdateConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict()
 
     CollectionName: Optional[str] = None
     Fields: Optional[List[CollectionField]] = None
@@ -388,9 +388,6 @@ def is_valid_index_meta_data_for_update(meta_data: dict, field_meta_dict: dict) 
 
 
 def fix_collection_meta(meta_data: dict) -> dict:
-    # This logic mutates the input dict to add AUTO_ID if missing, etc.
-    # We can perform this on the dict directly or parse into model, modify, dump.
-    # Direct dict modification is faster/closer to original behavior.
     fields = meta_data.get("Fields", [])
     has_pk = False
     for item in fields:
@@ -418,7 +415,7 @@ def fix_collection_meta(meta_data: dict) -> dict:
     return meta_data
 
 
-# Data validation logic - kept mostly manual or lightweight as creating models for dynamic data row is expensive
+# Data validation logic
 REQUIRED_COLLECTION_FIELD_TYPE_CHECK = {
     "int64": ([int], None, 0),
     "float32": ([int, float], None, 0.0),

@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from openviking.utils.time_utils import format_iso8601
+
 from .token_usage import TokenUsageTracker
 
 
@@ -25,12 +27,14 @@ class VLMBase(ABC):
         self._token_tracker = TokenUsageTracker()
 
     @abstractmethod
-    def get_completion(self, prompt: str) -> str:
+    def get_completion(self, prompt: str, thinking: bool = False) -> str:
         """Get text completion"""
         pass
 
     @abstractmethod
-    async def get_completion_async(self, prompt: str, max_retries: int = 0) -> str:
+    async def get_completion_async(
+        self, prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
         """Get text completion asynchronously"""
         pass
 
@@ -39,6 +43,7 @@ class VLMBase(ABC):
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
         """Get vision completion"""
         pass
@@ -48,6 +53,7 @@ class VLMBase(ABC):
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
         """Get vision completion asynchronously"""
         pass
@@ -94,7 +100,7 @@ class VLMBase(ABC):
             "total_prompt_tokens": total_usage.prompt_tokens,
             "total_completion_tokens": total_usage.completion_tokens,
             "total_tokens": total_usage.total_tokens,
-            "last_updated": total_usage.last_updated.isoformat(),
+            "last_updated": format_iso8601(total_usage.last_updated),
         }
 
     def reset_token_usage(self) -> None:
@@ -121,18 +127,25 @@ class VLMFactory:
         """
         provider = config.get("provider") or config.get("backend") or "openai"
 
-        if provider == "openai":
-            from .backends.openai_vlm import OpenAIVLM
+        use_litellm = config.get("use_litellm", True)
 
-            return OpenAIVLM(config)
-        elif provider == "volcengine":
-            from .backends.volcengine_vlm import VolcEngineVLM
+        if not use_litellm:
+            if provider == "openai":
+                from .backends.openai_vlm import OpenAIVLM
 
-            return VolcEngineVLM(config)
-        else:
-            raise ValueError(f"Unsupported VLM provider: {provider}")
+                return OpenAIVLM(config)
+            elif provider == "volcengine":
+                from .backends.volcengine_vlm import VolcEngineVLM
+
+                return VolcEngineVLM(config)
+
+        from .backends.litellm_vlm import LiteLLMVLMProvider
+
+        return LiteLLMVLMProvider(config)
 
     @staticmethod
     def get_available_providers() -> List[str]:
         """Get list of available providers"""
-        return ["openai", "volcengine"]
+        from .registry import get_all_provider_names
+
+        return get_all_provider_names()

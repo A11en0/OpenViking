@@ -136,19 +136,20 @@ Messages → LLM Extract → Candidate Memories
               ↓
 Vector Pre-filter → Find Similar Memories
               ↓
-LLM Dedup Decision → CREATE/UPDATE/MERGE/SKIP
+LLM Dedup Decision → candidate(skip/create/none) + item(merge/delete)
               ↓
 Write to AGFS → Vectorize
 ```
 
 ### Dedup Decisions
 
-| Decision | Description |
-|----------|-------------|
-| `CREATE` | New memory, create directly |
-| `UPDATE` | Update existing memory |
-| `MERGE` | Merge multiple memories |
-| `SKIP` | Duplicate, skip |
+| Level | Decision | Description |
+|------|----------|-------------|
+| Candidate | `skip` | Candidate is duplicate, skip and do nothing |
+| Candidate | `create` | Create candidate memory (optionally delete conflicting existing memories first) |
+| Candidate | `none` | Do not create candidate; resolve existing memories by item decisions |
+| Per-existing item | `merge` | Merge candidate content into specified existing memory |
+| Per-existing item | `delete` | Delete specified conflicting existing memory |
 
 ## Storage Structure
 
@@ -181,5 +182,5 @@ viking://agent/memories/
 
 - [Architecture Overview](./01-architecture.md) - System architecture
 - [Context Types](./02-context-types.md) - Three context types
-- [Context Extraction](./07-extraction.md) - Extraction flow
-- [Context Layers](./04-context-layers.md) - L0/L1/L2 model
+- [Context Extraction](./06-extraction.md) - Extraction flow
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model

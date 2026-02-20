@@ -35,7 +35,6 @@ class MemexClient:
         self._client = ov.SyncOpenViking(
             path=self.config.data_path,
             config=ov_config,
-            user=self.config.user,
         )
         self._client.initialize()
 

@@ -6,13 +6,6 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import Context, ResourceContentType, Vectorize
-from openviking.prompts import render_prompt
-from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
-from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import VikingURI
-from openviking.utils.config import get_openviking_config
-from openviking.utils.logger import get_logger
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -20,6 +13,20 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
+from openviking.parse.parsers.media.utils import (
+    generate_audio_summary,
+    generate_image_summary,
+    generate_video_summary,
+    get_media_type,
+)
+from openviking.prompts import render_prompt
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.utils import VikingURI
+from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -35,7 +42,7 @@ class SemanticProcessor(DequeueHandlerBase):
     4. Enqueue to EmbeddingQueue for vectorization
     """
 
-    def __init__(self, max_concurrent_llm: int = 10):
+    def __init__(self, max_concurrent_llm: int = 100):
         """
         Initialize SemanticProcessor.
 
@@ -43,6 +50,7 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
+        self._dag_executor: Optional[SemanticDagExecutor] = None
 
     def _detect_file_type(self, file_name: str) -> str:
         """
@@ -135,26 +143,14 @@ class SemanticProcessor(DequeueHandlerBase):
             )
 
             if msg.recursive:
-                # For recursive processing, collect all directory info
-                dir_info_list: List[Tuple[str, List[str], List[str]]] = []
-                await self._collect_directory_info(msg.uri, dir_info_list)
-
-                # Enqueue each directory for processing (leaves first)
-                # For re-enqueued messages, set recursive=False to avoid repeated recursion
-                for uri, _, _ in dir_info_list:
-                    # Create a new message for this directory
-                    sub_msg = SemanticMsg(
-                        uri=uri,
-                        context_type=msg.context_type,
-                        recursive=False,  # Avoid repeated recursion
-                    )
-
-                    # Enqueue for processing
-                    await self._enqueue_semantic_msg(sub_msg)
-
-                logger.info(
-                    f"Enqueued {len(dir_info_list)} directories for processing from: {msg.uri}"
+                executor = SemanticDagExecutor(
+                    processor=self,
+                    context_type=msg.context_type,
+                    max_concurrent_llm=self.max_concurrent_llm,
                 )
+                self._dag_executor = executor
+                await executor.run(msg.uri)
+                logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
                 return None
             else:
@@ -197,6 +193,11 @@ class SemanticProcessor(DequeueHandlerBase):
             self.report_error(str(e), data)
             return None
 
+    def get_dag_stats(self) -> Optional["DagStats"]:
+        if not self._dag_executor:
+            return None
+        return self._dag_executor.get_stats()
+
     async def _process_single_directory(
         self,
         uri: str,
@@ -211,7 +212,9 @@ class SemanticProcessor(DequeueHandlerBase):
         children_abstracts = await self._collect_children_abstracts(children_uris)
 
         # 2. Concurrently generate summaries for files in directory
-        file_summaries = await self._generate_file_summaries(file_paths)
+        file_summaries = await self._generate_file_summaries(
+            file_paths, context_type=context_type, parent_uri=uri, enqueue_files=True
+        )
 
         # 3. Generate .overview.md (contains brief description)
         overview = await self._generate_overview(uri, file_summaries, children_abstracts)
@@ -231,13 +234,6 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as e:
             logger.error(f"Failed to vectorize directory {uri}: {e}", exc_info=True)
 
-        # 7. Vectorize files
-        # Requires retrieval refactoring before enabling
-        try:
-            await self._vectorize_files(uri, context_type, file_paths, file_summaries)
-        except Exception as e:
-            logger.error(f"Failed to vectorize files in {uri}: {e}", exc_info=True)
-
     async def _collect_children_abstracts(self, children_uris: List[str]) -> List[Dict[str, str]]:
         """Collect .abstract.md from subdirectories."""
         viking_fs = get_viking_fs()
@@ -249,21 +245,86 @@ class SemanticProcessor(DequeueHandlerBase):
             results.append({"name": dir_name, "abstract": abstract})
         return results
 
-    async def _generate_file_summaries(self, file_paths: List[str]) -> List[Dict[str, str]]:
+    async def _generate_file_summaries(
+        self,
+        file_paths: List[str],
+        context_type: Optional[str] = None,
+        parent_uri: Optional[str] = None,
+        enqueue_files: bool = False,
+    ) -> List[Dict[str, str]]:
         """Concurrently generate file summaries."""
         if not file_paths:
             return []
 
-        sem = asyncio.Semaphore(self.max_concurrent_llm)
-
         async def generate_one_summary(file_path: str) -> Dict[str, str]:
-            async with sem:
-                return await self._generate_single_file_summary(file_path)
+            summary = await self._generate_single_file_summary(file_path)
+            if enqueue_files and context_type and parent_uri:
+                try:
+                    await self._vectorize_single_file(
+                        parent_uri=parent_uri,
+                        context_type=context_type,
+                        file_path=file_path,
+                        summary_dict=summary,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to vectorize file {file_path}: {e}",
+                        exc_info=True,
+                    )
+            return summary
 
         tasks = [generate_one_summary(fp) for fp in file_paths]
         return await asyncio.gather(*tasks)
 
-    async def _generate_single_file_summary(self, file_path: str) -> Dict[str, str]:
+    async def _generate_text_summary(
+        self, file_path: str, file_name: str, llm_sem: asyncio.Semaphore
+    ) -> Dict[str, str]:
+        """Generate summary for a single text file (code, documentation, or other text)."""
+        viking_fs = get_viking_fs()
+        vlm = get_openviking_config().vlm
+
+        # Read file content (limit length)
+        content = await viking_fs.read_file(file_path)
+        if isinstance(content, bytes):
+            # Try to decode with error handling for text files
+            try:
+                content = content.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
+                return {"name": file_name, "summary": ""}
+
+        # Limit content length (about 10000 tokens)
+        max_chars = 30000
+        if len(content) > max_chars:
+            content = content[:max_chars] + "\n...(truncated)"
+
+        # Generate summary
+        if not vlm.is_available():
+            logger.warning("VLM not available, using empty summary")
+            return {"name": file_name, "summary": ""}
+
+        # Detect file type and select appropriate prompt
+        file_type = self._detect_file_type(file_name)
+
+        if file_type == FILE_TYPE_CODE:
+            prompt_id = "semantic.code_summary"
+        elif file_type == FILE_TYPE_DOCUMENTATION:
+            prompt_id = "semantic.document_summary"
+        else:
+            prompt_id = "semantic.file_summary"
+
+        prompt = render_prompt(
+            prompt_id,
+            {"file_name": file_name, "content": content},
+        )
+
+        async with llm_sem:
+            summary = await vlm.get_completion_async(prompt)
+        return {"name": file_name, "summary": summary.strip()}
+
+    async def _generate_single_file_summary(
+        self, file_path: str, llm_sem: Optional[asyncio.Semaphore] = None
+    ) -> Dict[str, str]:
         """Generate summary for a single file.
 
         Args:
@@ -272,47 +333,17 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             {"name": file_name, "summary": summary_content}
         """
-        viking_fs = get_viking_fs()
-        vlm = get_openviking_config().vlm
         file_name = file_path.split("/")[-1]
-
-        try:
-            # Read file content (limit length)
-            content = await viking_fs.read_file(file_path)
-            if isinstance(content, bytes):
-                content = content.decode("utf-8")
-
-            # Limit content length (about 10000 tokens)
-            max_chars = 30000
-            if len(content) > max_chars:
-                content = content[:max_chars] + "\n...(truncated)"
-
-            # Generate summary
-            if not vlm.is_available():
-                logger.warning("VLM not available, using empty summary")
-                return {"name": file_name, "summary": ""}
-
-            # Detect file type and select appropriate prompt
-            file_type = self._detect_file_type(file_name)
-
-            if file_type == FILE_TYPE_CODE:
-                prompt_id = "semantic.code_summary"
-            elif file_type == FILE_TYPE_DOCUMENTATION:
-                prompt_id = "semantic.document_summary"
-            else:
-                prompt_id = "semantic.file_summary"
-
-            prompt = render_prompt(
-                prompt_id,
-                {"file_name": file_name, "content": content},
-            )
-
-            summary = await vlm.get_completion_async(prompt)
-            return {"name": file_name, "summary": summary.strip()}
-
-        except Exception as e:
-            logger.warning(f"Failed to generate summary for {file_path}: {e}")
-            return {"name": file_name, "summary": ""}
+        llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
+        media_type = get_media_type(file_name, None)
+        if media_type == "image":
+            return await generate_image_summary(file_path, file_name, llm_sem)
+        elif media_type == "audio":
+            return await generate_audio_summary(file_path, file_name, llm_sem)
+        elif media_type == "video":
+            return await generate_video_summary(file_path, file_name, llm_sem)
+        else:
+            return await self._generate_text_summary(file_path, file_name, llm_sem)
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract abstract from overview.md."""
@@ -434,37 +465,66 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries: List[Dict[str, str]],
     ) -> None:
         """Vectorize files in directory."""
-        from datetime import datetime
-
-        from openviking.core.context import Context
         from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
         for file_path, file_summary_dict in zip(file_paths, file_summaries):
-            file_name = file_summary_dict["name"]
-            summary = file_summary_dict["summary"]
+            await self._vectorize_single_file(
+                parent_uri=uri,
+                context_type=context_type,
+                file_path=file_path,
+                summary_dict=file_summary_dict,
+                embedding_queue=embedding_queue,
+            )
+
+    async def _vectorize_single_file(
+        self,
+        parent_uri: str,
+        context_type: str,
+        file_path: str,
+        summary_dict: Dict[str, str],
+        embedding_queue: Optional[Any] = None,
+    ) -> None:
+        """Vectorize a single file using its content or summary."""
+        from datetime import datetime
+
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+
+        try:
+            file_name = summary_dict.get("name") or file_path.split("/")[-1]
+            summary = summary_dict.get("summary", "")
+
+            if embedding_queue is None:
+                queue_manager = get_queue_manager()
+                embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
             context = Context(
                 uri=file_path,
-                parent_uri=uri,
+                parent_uri=parent_uri,
                 is_leaf=True,
                 abstract=summary,
                 context_type=context_type,
                 created_at=datetime.now(),
             )
+
             if self.get_resource_content_type(file_name) == ResourceContentType.TEXT:
                 content = await get_viking_fs().read_file(file_path)
                 context.set_vectorize(Vectorize(text=content))
             elif summary:
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                continue
+                return
+
             embedding_msg = EmbeddingMsgConverter.from_context(context)
+            if not embedding_msg:
+                return
             await embedding_queue.enqueue(embedding_msg)  # type: ignore
             logger.debug(f"Enqueued file for vectorization: {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
 
     def get_resource_content_type(self, file_name: str) -> ResourceContentType:
         def _is_image_file(file_name: str) -> bool:

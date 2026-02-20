@@ -3,7 +3,7 @@
 Memex CLI - Personal Knowledge Assistant
 
 Usage:
-    python -m memex.cli [--data-path PATH] [--user USER]
+    python -m memex.cli [--data-path PATH]
 
 Commands:
     /help               Show help
@@ -486,7 +486,6 @@ def main():
     config = MemexConfig(
         data_path=args.data_path,
         config_path=args.config_path,
-        user=args.user,
     )
 
     cli = MemexCLI(config)

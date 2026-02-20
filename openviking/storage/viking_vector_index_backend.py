@@ -15,8 +15,8 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
-from openviking.utils import get_logger
-from openviking.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
 
@@ -64,7 +64,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             backend = VikingVectorIndexBackend(config=config)
 
             # 3. Volcengine VikingDB
-            from openviking.utils.config.storage_config import VolcengineConfig
+            from openviking_cli.utils.config.storage_config import VolcengineConfig
             config = VectorDBBackendConfig(
                 backend="volcengine",
                 volcengine=VolcengineConfig(
@@ -109,6 +109,24 @@ class VikingVectorIndexBackend(VikingDBInterface):
             logger.info(
                 f"VectorDB backend initialized in Volcengine mode: region={volc_config['Region']}"
             )
+        elif config.backend == "vikingdb":
+            if not config.vikingdb.host:
+                raise ValueError("VikingDB backend requires a valid host")
+            # VikingDB private deployment mode
+            self._mode = config.backend
+            viking_config = {
+                "Host": config.vikingdb.host,
+                "Headers": config.vikingdb.headers,
+            }
+
+            from openviking.storage.vectordb.project.vikingdb_project import (
+                get_or_create_vikingdb_project,
+            )
+
+            self.project = get_or_create_vikingdb_project(
+                project_name=self.DEFAULT_PROJECT_NAME, config=viking_config
+            )
+            logger.info(f"VikingDB backend initialized in private mode: {config.vikingdb.host}")
         elif config.backend == "http":
             if not config.url:
                 raise ValueError("HTTP backend requires a valid URL")
@@ -207,8 +225,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 logger.debug(f"Collection '{name}' already exists")
                 return False
 
-            # Extract configuration from schema
-            collection_meta = schema
+            collection_meta = schema.copy()
+
+            scalar_index_fields = []
+            if "ScalarIndex" in collection_meta:
+                scalar_index_fields = collection_meta.pop("ScalarIndex")
 
             # Ensure CollectionName is set
             if "CollectionName" not in collection_meta:
@@ -227,27 +248,27 @@ class VikingVectorIndexBackend(VikingDBInterface):
             # Create collection using vectordb project
             collection = self.project.create_collection(name, collection_meta)
 
-            # Build scalar index fields list from Fields
-            scalar_index_fields = []
-            for field in collection_meta.get("Fields", []):
-                field_name = field.get("FieldName")
-                field_type = field.get("FieldType")
-                is_primary_key = field.get("IsPrimaryKey", False)
-                # Index all non-vector, non-primary-key, and non-date_time fields by default
-                # Volcengine VikingDB doesn't support indexing date_time fields
-                if (
-                    field_name
-                    and field_type not in ("vector", "sparse_vector", "date_time")
-                    and not is_primary_key
-                ):
-                    scalar_index_fields.append(field_name)
+            # Filter date_time fields for volcengine and vikingdb backends
+            if self._mode in ["volcengine", "vikingdb"]:
+                date_time_fields = {
+                    field.get("FieldName")
+                    for field in collection_meta.get("Fields", [])
+                    if field.get("FieldType") == "date_time"
+                }
+                scalar_index_fields = [
+                    field for field in scalar_index_fields if field not in date_time_fields
+                ]
 
             # Create default index for the collection
             use_sparse = self.sparse_weight > 0.0
+            index_type = "flat_hybrid" if use_sparse else "flat"
+            if self._mode in ["volcengine", "vikingdb"]:
+                index_type = "hnsw_hybrid" if use_sparse else "hnsw"
+
             index_meta = {
                 "IndexName": self.DEFAULT_INDEX_NAME,
                 "VectorIndex": {
-                    "IndexType": "flat_hybrid" if use_sparse else "flat",
+                    "IndexType": index_type,
                     "Distance": distance,
                     "Quant": "int8",
                 },
@@ -454,7 +475,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 record = dict(item.fields) if item.fields else {}
                 record["id"] = item.id
                 records.append(record)
-            if len(records) > 0:
+            if len(records) > 1:
                 raise ValueError(f"Duplicate records found for URI: {uri}")
             if len(records) == 0:
                 raise ValueError(f"Record not found for URI: {uri}")
@@ -539,29 +560,25 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def remove_by_uri(self, collection: str, uri: str) -> int:
         """Remove resource(s) by URI."""
         try:
-            # Find records with matching URI
             target_records = await self.filter(
                 collection=collection,
                 filter={"op": "must", "field": "uri", "conds": [uri]},
-                limit=1,
+                limit=10,
             )
 
             if not target_records:
                 return 0
 
             total_deleted = 0
-            target = target_records[0]
-            is_leaf = target.get("is_leaf", False)
 
-            # If not leaf (i.e., intermediate directory), find and delete all descendants recursively
-            if not is_leaf:
+            # If any record indicates this URI is a directory node, remove descendants first.
+            if any(not r.get("is_leaf", False) for r in target_records):
                 descendant_count = await self._remove_descendants(collection, uri)
                 total_deleted += descendant_count
 
-            # Delete the target itself
-            if "id" in target:
-                await self.delete(collection, [target["id"]])
-                total_deleted += 1
+            ids = [r.get("id") for r in target_records if r.get("id")]
+            if ids:
+                total_deleted += await self.delete(collection, ids)
 
             logger.info(f"Removed {total_deleted} record(s) for URI: {uri}")
             return total_deleted

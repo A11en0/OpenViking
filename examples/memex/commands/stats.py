@@ -65,7 +65,7 @@ class StatsCommands:
 
         info_text = f"""[cyan]Data Path:[/cyan] {config.data_path}
 [cyan]Config Path:[/cyan] {config.config_path}
-[cyan]User:[/cyan] {config.user}
+[cyan]User:[/cyan] {config.default_user}
 [cyan]LLM Backend:[/cyan] {llm_backend}
 [cyan]LLM Model:[/cyan] {llm_model}
 [cyan]Search Top-K:[/cyan] {config.search_top_k}
